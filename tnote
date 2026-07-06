@@ -1,0 +1,282 @@
+#!/usr/bin/env python3
+
+import argparse
+import sqlite3
+import sys
+from datetime import datetime
+from pathlib import Path
+
+DB_PATH = Path.home() / ".local" / "share" / "tnote" / "notes.sqlite3"
+
+
+def connect():
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT NOT NULL,
+            category TEXT,
+            tags TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    return conn
+
+
+def add_note(args):
+    text = " ".join(args.text or []).strip()
+
+    if not text:
+        print("Nothing to save.")
+        return
+
+    conn = connect()
+    conn.execute(
+        """
+        INSERT INTO notes (text, category, tags, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            text,
+            args.category,
+            ",".join(args.tag or []),
+            datetime.now().isoformat(timespec="seconds"),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    category = f" [{args.category}]" if args.category else ""
+    print(f"Saved{category}: {text}")
+
+
+def list_notes(args):
+    conn = connect()
+
+    query = """
+        SELECT id, text, category, tags, created_at
+        FROM notes
+    """
+    params = []
+
+    if args.category:
+        query += " WHERE category = ?"
+        params.append(args.category)
+
+    query += " ORDER BY id DESC LIMIT ?"
+    params.append(args.limit)
+
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+
+    if not rows:
+        print("No notes found.")
+        return
+
+    for note_id, text, category, tags, created_at in rows:
+        cat = f" [{category}]" if category else ""
+        tag_text = f" #{tags.replace(',', ' #')}" if tags else ""
+
+        print(f"{note_id}. {created_at}{cat}{tag_text}")
+        print(f"   {text}")
+
+
+def search_notes(args):
+    term = " ".join(args.query or []).strip()
+
+    if not term:
+        print("Search query missing.")
+        return
+
+    conn = connect()
+    rows = conn.execute(
+        """
+        SELECT id, text, category, tags, created_at
+        FROM notes
+        WHERE text LIKE ? OR category LIKE ? OR tags LIKE ?
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (f"%{term}%", f"%{term}%", f"%{term}%", args.limit),
+    ).fetchall()
+    conn.close()
+
+    if not rows:
+        print("No matching notes found.")
+        return
+
+    for note_id, text, category, tags, created_at in rows:
+        cat = f" [{category}]" if category else ""
+        tag_text = f" #{tags.replace(',', ' #')}" if tags else ""
+
+        print(f"{note_id}. {created_at}{cat}{tag_text}")
+        print(f"   {text}")
+
+
+def delete_note(args):
+    conn = connect()
+    cur = conn.execute("DELETE FROM notes WHERE id = ?", (args.id,))
+    conn.commit()
+    conn.close()
+
+    if cur.rowcount:
+        print(f"Deleted note {args.id}.")
+    else:
+        print(f"No note found with id {args.id}.")
+
+
+def db_path(args):
+    print(DB_PATH)
+
+
+def print_root_help():
+    print("""tnote - tiny terminal note tool
+
+Usage:
+  tnote "your note text"
+  tnote "your note text" -c category
+  tnote "your note text" --tag tag
+  tnote list
+  tnote search <query>
+  tnote delete <id>
+  tnote path
+
+Commands:
+  list, ls       list recent notes
+  search, s      search notes
+  delete, rm     delete a note by id
+  path           show database path
+
+Options:
+  -c, --category category
+  --tag tag
+  -h, --help
+
+Examples:
+  tnote "fix printer config later"
+  tnote "look into SQLite FTS" -c dev
+  tnote "buy oat milk" -c errands --tag shopping
+  tnote list
+  tnote search sqlite
+  tnote delete 3
+""")
+
+
+def build_command_parser():
+    parser = argparse.ArgumentParser(
+        prog="tnote",
+        description="Tiny terminal note tool.",
+    )
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    list_parser = subparsers.add_parser(
+        "list",
+        aliases=["ls"],
+        help="list recent notes",
+    )
+    list_parser.add_argument(
+        "-c",
+        "--category",
+        help="only show notes from this category",
+    )
+    list_parser.add_argument(
+        "-n",
+        "--limit",
+        type=int,
+        default=20,
+        help="number of notes to show, default: 20",
+    )
+    list_parser.set_defaults(func=list_notes)
+
+    search_parser = subparsers.add_parser(
+        "search",
+        aliases=["s"],
+        help="search notes",
+    )
+    search_parser.add_argument(
+        "query",
+        nargs="+",
+        help="search query",
+    )
+    search_parser.add_argument(
+        "-n",
+        "--limit",
+        type=int,
+        default=20,
+        help="number of results to show, default: 20",
+    )
+    search_parser.set_defaults(func=search_notes)
+
+    delete_parser = subparsers.add_parser(
+        "delete",
+        aliases=["rm"],
+        help="delete a note by id",
+    )
+    delete_parser.add_argument(
+        "id",
+        type=int,
+        help="id of the note to delete",
+    )
+    delete_parser.set_defaults(func=delete_note)
+
+    path_parser = subparsers.add_parser(
+        "path",
+        help="show database path",
+    )
+    path_parser.set_defaults(func=db_path)
+
+    return parser
+
+
+def build_note_parser():
+    parser = argparse.ArgumentParser(
+        prog="tnote",
+        description="Save a quick terminal note.",
+    )
+
+    parser.add_argument(
+        "text",
+        nargs="+",
+        help="note text to save",
+    )
+
+    parser.add_argument(
+        "-c",
+        "--category",
+        help="save note under a category",
+    )
+
+    parser.add_argument(
+        "--tag",
+        action="append",
+        help="add a tag; can be used multiple times",
+    )
+
+    return parser
+
+
+def main():
+    commands = {"list", "ls", "search", "s", "delete", "rm", "path"}
+
+    if len(sys.argv) == 1 or sys.argv[1] in {"-h", "--help"}:
+        print_root_help()
+        return
+
+    first_arg = sys.argv[1]
+
+    if first_arg in commands:
+        parser = build_command_parser()
+        args = parser.parse_args()
+        args.func(args)
+        return
+
+    parser = build_note_parser()
+    args = parser.parse_args()
+    add_note(args)
+
+
+if __name__ == "__main__":
+    main()
