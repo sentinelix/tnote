@@ -25,8 +25,8 @@ def connect():
     return conn
 
 
-def add_note(args):
-    text = " ".join(args.text or []).strip()
+def add_note(text, category=None, tags=None):
+    text = text.strip()
 
     if not text:
         print("Nothing to save.")
@@ -40,16 +40,16 @@ def add_note(args):
         """,
         (
             text,
-            args.category,
-            ",".join(args.tag or []),
+            category,
+            ",".join(tags or []),
             datetime.now().isoformat(timespec="seconds"),
         ),
     )
     conn.commit()
     conn.close()
 
-    category = f" [{args.category}]" if args.category else ""
-    print(f"Saved{category}: {text}")
+    category_text = f" [{category}]" if category else ""
+    print(f"Saved{category_text}: {text}")
 
 
 def list_notes(args):
@@ -156,11 +156,17 @@ Options:
 
 Examples:
   tnote "fix printer config later"
+  tnote "printer says 'filament error'"
+  tnote 'printer says "filament error"'
   tnote "look into SQLite FTS" -c dev
   tnote "buy oat milk" -c errands --tag shopping
   tnote list
   tnote search sqlite
   tnote delete 3
+
+Note:
+  If your note starts with a command word like "list", use:
+  tnote -- "list printer replacement parts"
 """)
 
 
@@ -231,31 +237,47 @@ def build_command_parser():
     return parser
 
 
-def build_note_parser():
-    parser = argparse.ArgumentParser(
-        prog="tnote",
-        description="Save a quick terminal note.",
-    )
+def parse_note_args(argv):
+    category = None
+    tags = []
+    text_parts = []
 
-    parser.add_argument(
-        "text",
-        nargs="+",
-        help="note text to save",
-    )
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
 
-    parser.add_argument(
-        "-c",
-        "--category",
-        help="save note under a category",
-    )
+        if arg == "--":
+            text_parts.extend(argv[i + 1:])
+            break
 
-    parser.add_argument(
-        "--tag",
-        action="append",
-        help="add a tag; can be used multiple times",
-    )
+        if arg in {"-h", "--help"}:
+            print_root_help()
+            return None
 
-    return parser
+        if arg in {"-c", "--category"}:
+            if i + 1 >= len(argv):
+                print(f"tnote: error: {arg} requires a value")
+                return None
+            category = argv[i + 1]
+            i += 2
+            continue
+
+        if arg == "--tag":
+            if i + 1 >= len(argv):
+                print("tnote: error: --tag requires a value")
+                return None
+            tags.append(argv[i + 1])
+            i += 2
+            continue
+
+        text_parts.append(arg)
+        i += 1
+
+    return {
+        "text": " ".join(text_parts),
+        "category": category,
+        "tags": tags,
+    }
 
 
 def main():
@@ -265,17 +287,24 @@ def main():
         print_root_help()
         return
 
-    first_arg = sys.argv[1]
+    argv = sys.argv[1:]
 
-    if first_arg in commands:
+    if argv[0] in commands:
         parser = build_command_parser()
-        args = parser.parse_args()
+        args = parser.parse_args(argv)
         args.func(args)
         return
 
-    parser = build_note_parser()
-    args = parser.parse_args()
-    add_note(args)
+    note_args = parse_note_args(argv)
+
+    if note_args is None:
+        return
+
+    add_note(
+        text=note_args["text"],
+        category=note_args["category"],
+        tags=note_args["tags"],
+    )
 
 
 if __name__ == "__main__":
