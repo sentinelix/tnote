@@ -20,7 +20,7 @@ Tiny terminal note CLI for quickly saving ideas, reminders, and scratch notes fr
 Clone the repository:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/tnote.git
+git clone https://github.com/sentinelix/tnote.git
 cd tnote
 ```
 
